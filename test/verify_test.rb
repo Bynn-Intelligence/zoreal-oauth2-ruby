@@ -96,3 +96,66 @@ class VerifyTest < Minitest::Test
     refute login.email_verified?
   end
 end
+
+# The assurance floor at verification (products/oauth2/02 section 5.1): the
+# request was advisory, the signed claim is the proof, and this is the check.
+class AcrVerifyTest < Minitest::Test
+  ISSUER = VerifyTest::ISSUER
+  CLIENT_ID = VerifyTest::CLIENT_ID
+
+  def setup
+    @key = OpenSSL::PKey::EC.generate('prime256v1')
+    jwk = JWT::JWK.new(@key, use: 'sig', alg: 'ES256')
+    @client = Zoreal::OAuth2::Client.new(client_id: CLIENT_ID, issuer: ISSUER)
+    @client.instance_variable_get(:@cache)
+           .write(Zoreal::OAuth2::Client::JWKS_CACHE_KEY, { keys: [jwk.export] },
+                  expires_in: Zoreal::OAuth2::Client::JWKS_TTL)
+    @kid = jwk.export[:kid]
+  end
+
+  def token(acr)
+    claims = { 'iss' => ISSUER, 'sub' => 's', 'aud' => CLIENT_ID,
+               'exp' => Time.now.to_i + 120, 'acr' => acr }.compact
+    JWT.encode(claims, @key, 'ES256', kid: @kid)
+  end
+
+  def test_equal_acr_satisfies
+    assert @client.verify_id_token(token('zoreal.live'), acr: 'zoreal.live')
+  end
+
+  def test_stronger_acr_satisfies
+    assert @client.verify_id_token(token('zoreal.live'), acr: 'zoreal.device')
+  end
+
+  def test_weaker_acr_is_refused
+    assert_raises(Zoreal::OAuth2::VerificationError) do
+      @client.verify_id_token(token('zoreal.device'), acr: 'zoreal.live')
+    end
+  end
+
+  def test_missing_acr_is_refused_when_required
+    assert_raises(Zoreal::OAuth2::VerificationError) do
+      @client.verify_id_token(token(nil), acr: 'zoreal.session')
+    end
+  end
+
+  def test_unknown_required_acr_is_a_caller_bug
+    assert_raises(Zoreal::OAuth2::ConfigurationError) do
+      @client.verify_id_token(token('zoreal.live'), acr: 'zoreal.liveness')
+    end
+  end
+
+  def test_no_required_acr_checks_nothing
+    assert @client.verify_id_token(token(nil))
+  end
+
+  def test_login_conveniences
+    login = Zoreal::OAuth2::Login.new(client: @client, claims: { 'acr' => 'zoreal.live' }, id_token: 'x')
+    assert login.live?
+    assert login.satisfies_acr?('zoreal.device')
+    refute login.satisfies_acr?('made.up')
+    device = Zoreal::OAuth2::Login.new(client: @client, claims: { 'acr' => 'zoreal.device' }, id_token: 'x')
+    refute device.live?
+    refute device.satisfies_acr?('zoreal.live')
+  end
+end

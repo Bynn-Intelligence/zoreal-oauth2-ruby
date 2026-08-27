@@ -30,6 +30,10 @@ module Zoreal
       JWKS_CACHE_KEY = 'zoreal_oauth2_jwks'.freeze
 
       AUTH_METHODS = %w[none client_secret_basic private_key_jwt tls_client_auth].freeze
+      # The assurance vocabulary, weakest to strongest. Verification accepts
+      # equal or stronger: an RP requiring zoreal.device is satisfied by a
+      # zoreal.live token, never the reverse.
+      ACR_ORDER = { 'zoreal.session' => 0, 'zoreal.device' => 1, 'zoreal.live' => 2 }.freeze
       # The provider rejects an assertion whose exp is more than 60 seconds
       # out, so that is the lifetime, not a choice.
       ASSERTION_LIFETIME = 60
@@ -80,12 +84,19 @@ module Zoreal
 
       # The whole login, in order: exchange the code (with the PKCE verifier
       # the browser SDK handed over), verify the ID token against the JWKS,
-      # check the nonce when the caller has it. Returns a Login; personal data
-      # is NOT fetched here, because the ID token never carries it and not
-      # every caller wants it — Login#userinfo fetches on first use.
-      def authenticate(code:, code_verifier:, nonce: nil)
+      # check the nonce when the caller has it, and — when the caller passes
+      # acr: — refuse a token whose assurance is below it. Returns a Login;
+      # personal data is NOT fetched here, because the ID token never carries
+      # it and not every caller wants it — Login#userinfo fetches on first use.
+      #
+      # REQUESTING an assurance on the wire (the SDK's acr_values) is
+      # advisory; the signed acr claim is the proof, and this parameter is
+      # where a relying party that asked for a liveness check verifies it
+      # actually happened. An RP that requires zoreal.live and never passes
+      # acr: here has checked nothing.
+      def authenticate(code:, code_verifier:, nonce: nil, acr: nil)
         tokens = exchange(code: code, code_verifier: code_verifier)
-        claims = verify_id_token(tokens['id_token'], nonce: nonce)
+        claims = verify_id_token(tokens['id_token'], nonce: nonce, acr: acr)
         Login.new(client: self, claims: claims,
                   id_token: tokens['id_token'],
                   access_token: tokens['access_token'],
@@ -116,12 +127,12 @@ module Zoreal
         body
       end
 
-      # ES256 against the provider's JWKS, plus iss, aud, exp and — when the
-      # caller passes the nonce the SDK generated — the nonce binding. Returns
-      # the claims. There is no RS256 fallback on purpose: ZOREAL signs
-      # nothing with RSA, and accepting a second algorithm is how algorithm
-      # confusion starts.
-      def verify_id_token(id_token, nonce: nil)
+      # ES256 against the provider's JWKS, plus iss, aud, exp, the nonce
+      # binding when the caller has the nonce, and the assurance floor when
+      # the caller passes acr:. Returns the claims. There is no RS256
+      # fallback on purpose: ZOREAL signs nothing with RSA, and accepting a
+      # second algorithm is how algorithm confusion starts.
+      def verify_id_token(id_token, nonce: nil, acr: nil)
         claims, = JWT.decode(
           id_token, nil, true,
           algorithms: ['ES256'],
@@ -135,6 +146,7 @@ module Zoreal
         if !nil_or_empty?(nonce) && claims['nonce'] != nonce
           raise VerificationError, 'the ID token nonce is not the one this login started with'
         end
+        verify_acr!(claims, acr) unless nil_or_empty?(acr)
 
         claims
       rescue JWT::DecodeError => e
@@ -161,6 +173,20 @@ module Zoreal
       end
 
       private
+
+      # Equal or stronger satisfies; anything else — weaker, missing, or a
+      # value outside the vocabulary — is refused. An unknown REQUIREMENT is a
+      # caller bug and says so plainly rather than failing every login.
+      def verify_acr!(claims, required)
+        required_rank = ACR_ORDER[required]
+        raise ConfigurationError, "unknown required acr #{required}; supported: #{ACR_ORDER.keys.join(', ')}" if required_rank.nil?
+
+        actual_rank = ACR_ORDER[claims['acr']]
+        return if actual_rank && actual_rank >= required_rank
+
+        raise VerificationError,
+              "the ID token says acr #{claims['acr'].inspect}, below the required #{required}"
+      end
 
       def jwks
         cached = @cache.read(JWKS_CACHE_KEY)

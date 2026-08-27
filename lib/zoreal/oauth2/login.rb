@@ -31,6 +31,21 @@ module Zoreal
         claims['acr']
       end
 
+      # A fresh liveness capture backed this login. The convenience spelling
+      # of acr == 'zoreal.live'; for enforcement, pass acr: to authenticate
+      # and let verification refuse the token instead of checking after.
+      def live?
+        acr == 'zoreal.live'
+      end
+
+      # Equal or stronger satisfies, on the client's ordering
+      # (session < device < live). Unknown values satisfy nothing.
+      def satisfies_acr?(required)
+        actual = Client::ACR_ORDER[acr]
+        wanted = Client::ACR_ORDER[required]
+        !actual.nil? && !wanted.nil? && actual >= wanted
+      end
+
       def amr
         claims['amr']
       end
