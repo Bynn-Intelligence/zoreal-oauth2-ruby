@@ -1,6 +1,6 @@
 # zoreal-oauth2
 
-[![Gem Version](https://img.shields.io/gem/v/zoreal-oauth2)](https://rubygems.org/gems/zoreal-oauth2) [![Downloads](https://img.shields.io/gem/dt/zoreal-oauth2)](https://rubygems.org/gems/zoreal-oauth2) [![CI](https://img.shields.io/github/actions/workflow/status/Bynn-Intelligence/zoreal-oauth2-ruby/ci.yml?branch=main&label=CI)](https://github.com/Bynn-Intelligence/zoreal-oauth2-ruby/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+[![Gem Version](https://img.shields.io/gem/v/zoreal-oauth2)](https://rubygems.org/gems/zoreal-oauth2) [![CI](https://img.shields.io/github/actions/workflow/status/Bynn-Intelligence/zoreal-oauth2-ruby/ci.yml?branch=main&label=CI)](https://github.com/Bynn-Intelligence/zoreal-oauth2-ruby/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
 Login with ZOREAL for Ruby backends: the relying-party half of the flow that
 [`@zoreal/oauth2-react`](https://github.com/Bynn-Intelligence/zoreal-oauth2-react)
