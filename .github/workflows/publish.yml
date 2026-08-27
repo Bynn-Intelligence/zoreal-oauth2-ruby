@@ -8,8 +8,13 @@
 # To ship without cutting a release (docs, CI tweaks), put [skip publish] in
 # the commit message.
 #
-# Needs: the RUBYGEMS_API_KEY secret (an API key from rubygems.org with push
-# scope for zoreal-oauth2).
+# Publishes via RubyGems OIDC trusted publishing bound to the rubygems-publish
+# environment: no RUBYGEMS_API_KEY, no stored credential. configure-rubygems-
+# credentials exchanges the workflow id-token for a short-lived, scoped key
+# that its post-step revokes. The built gem is also attested with Sigstore
+# build provenance (verifiable via `gh attestation verify`), since rubygems.org
+# does not render a provenance panel of its own yet. Requires this repo +
+# workflow + environment registered as a trusted publisher on rubygems.org.
 name: Publish to RubyGems
 
 on:
@@ -29,6 +34,7 @@ jobs:
     permissions:
       contents: write
       id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -50,15 +56,24 @@ jobs:
       - run: bundle exec rake test
       - run: gem build zoreal-oauth2.gemspec
 
+      # Sigstore build provenance over the exact gem artifact. rubygems.org
+      # does not display it yet, but it is logged to the transparency log and
+      # verifiable with `gh attestation verify <gem> --repo <owner>/<repo>`.
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: "zoreal-oauth2-${{ steps.bump.outputs.version }}.gem"
+
       - run: |
           git add lib/zoreal/oauth2/version.rb
           git commit -m "Release v${{ steps.bump.outputs.version }} [skip publish]"
           git tag "v${{ steps.bump.outputs.version }}"
           git push origin HEAD:main "v${{ steps.bump.outputs.version }}"
 
+      # OIDC trusted publishing: exchange the workflow id-token for a short-
+      # lived, scoped rubygems.org key (revoked by the action's post-step), so
+      # no RUBYGEMS_API_KEY is stored. gem push then uses it with no env.
+      - uses: rubygems/configure-rubygems-credentials@v2.1.0
       - run: gem push "zoreal-oauth2-${{ steps.bump.outputs.version }}.gem"
-        env:
-          GEM_HOST_API_KEY: ${{ secrets.RUBYGEMS_API_KEY }}
 
       - run: gh release create "v${{ steps.bump.outputs.version }}" --title "v${{ steps.bump.outputs.version }}" --generate-notes
         env:

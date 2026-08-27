@@ -387,6 +387,15 @@ end
   normalized. Production is `https://id.zoreal.com`; override `issuer:` only
   when pointing at a non-production provider you were given.
 
+## Verifying this release
+
+Every version is published from GitHub Actions by [RubyGems trusted publishing](https://guides.rubygems.org/trusted-publishing/): the workflow authenticates to rubygems.org over OIDC and no long-lived API key is stored. Each build is also attested with [Sigstore](https://www.sigstore.dev/) build provenance and recorded in a public transparency log, so you can confirm which commit and workflow produced the gem:
+
+```sh
+gem fetch zoreal-oauth2
+gh attestation verify zoreal-oauth2-*.gem --repo Bynn-Intelligence/zoreal-oauth2-ruby
+```
+
 ## The ZOREAL OAuth2 library family
 
 | Repository | Package | Role |
