@@ -18,9 +18,11 @@ zoreal-oauth2 (this gem)   your backend: exchange, verify, userinfo
 ## Install
 
 ```ruby
-# Gemfile — until the gem is on rubygems.org, vendor it or use the git source:
-gem 'zoreal-oauth2', git: 'https://github.com/Bynn-Intelligence/zoreal-oauth2-ruby'
+# Gemfile
+gem 'zoreal-oauth2'
 ```
+
+Or directly: `gem install zoreal-oauth2`.
 
 Ruby >= 3.1. One dependency: `jwt`.
 
