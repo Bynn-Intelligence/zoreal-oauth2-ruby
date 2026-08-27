@@ -26,6 +26,41 @@ Or directly: `gem install zoreal-oauth2`.
 
 Ruby >= 3.1. One dependency: `jwt`.
 
+## Getting your credentials
+
+Everything the client constructor needs comes from a ZOREAL **asset**.
+
+1. Create an account at **https://zoreal.com** and open **Assets**.
+2. **Create an asset** — a *website* (a domain you own) or an *app bundle* (a
+   reverse-DNS bundle id). An asset is the thing users log in to; its token is
+   your `client_id` and it looks like `ast_...`.
+3. On the asset, open the **OAuth2** tab and set:
+   - the **redirect URIs** and **JavaScript origins** your app uses (requests
+     from anything not registered are rejected — this is the core control),
+   - the **scopes** the client is allowed to request (see the catalogue below),
+   - your **client authentication**: generate a **client secret**
+     (`client_secret_basic`), or register a **JWKS** for `private_key_jwt`. A
+     public client authenticates with PKCE alone and no secret.
+4. A website asset must **verify its domain** (a DNS or meta-tag proof, shown in
+   the dashboard) before it can request personal-data scopes or sign users in;
+   the verified domain is what your users' `sub` is pairwise against.
+
+The `client_id` is public (it ships in your frontend). The client secret is not
+— keep it in your server's secret store, never in the browser.
+
+### There is no test-identity sandbox — and that is deliberate
+
+ZOREAL **never issues fake or sandbox humans**: a pool of test identities would
+be a fraud vector against the exact thing the product proves. So you always
+authenticate **real** ZOREAL IDs.
+
+To develop and test, **create a free ZOREAL ID for yourself** (enrol in the
+ZOREAL ID app) and sign in with it. Mark your asset's environment **sandbox**
+in the dashboard while building — a sandbox asset may register `http://localhost`
+origins and redirect URIs that a production asset may not — and flip it to
+production when you ship. The identities are real either way; only the allowed
+origins differ.
+
 ## Quick start
 
 Build one client at boot and share it; it is thread-safe.
@@ -205,10 +240,123 @@ a `private_key` implies `private_key_jwt`, neither means `none`.
 and `portrait` from `/userinfo` (`portrait` is registrable but not served by
 the provider yet, and returns nil until it is).
 
-Errors: `ConfigurationError`, `ExchangeError` (carries the provider's OAuth
-error code and reason, verbatim), `VerificationError`, `UserinfoError`. A
-returning user matched on `sub` can survive a rescued `UserinfoError`; a
-signup that needs the email cannot.
+## Scopes and claims
+
+Scopes are requested in the **frontend** (the SDK's `scope` string, always
+starting with `openid`), consented to by the holder, and pre-authorized on your
+asset. What each grants and where it is delivered:
+
+| Scope | Claims | Delivered in | Tier | Requires |
+|---|---|---|---|---|
+| `openid` | `sub`, `iss`, `aud`, `exp`, `iat`, `nonce`, `auth_time`, `acr`, `amr`, and the assurance block | ID token | A | any client |
+| `zoreal.age` | `age_over_13/16/18/21/65` booleans — only the thresholds you registered, never an age or birthdate | ID token | A | any client |
+| `zoreal.nationality` | `nationality` (ISO 3166-1 alpha-3) | ID token | A | any client |
+| `email` | `email`, `email_verified` | `/userinfo` | B | confidential client + verified domain |
+| `profile.name` | `name`, `given_name`, `family_name` | `/userinfo` | B | confidential client + verified domain |
+| `profile.birthdate` | `birthdate` (full ISO 8601 date) | `/userinfo` | B | confidential client + verified domain |
+| `profile.document` | `document_type`, `document_number`, `issuing_country`, `document_expires_on` | `/userinfo` | B | confidential client + verified domain |
+| `profile.portrait` | `portrait` (the chip's facial image; GDPR Article 9 data) | `/userinfo` | C | confidential client + verified domain — *registrable but not served yet* |
+
+- **Tier A** rides in the ID token and is available to every client, so the
+  no-backend browser button can use it. **Tier B and C** are personal data,
+  served only from `/userinfo` to a confidential client on a domain you have
+  verified, and never placed in a browser token.
+- **Age thresholds are a fixed set** — 13, 16, 18, 21, 65 — that you register on
+  the asset. `login.age_over?(n)` returns `nil` for a threshold you did not
+  register (no claim was minted), which is different from `false`.
+
+## Error reference
+
+`exchange` / `authenticate` raise `ExchangeError`, which carries the provider's
+own `oauth_error` code and `description` verbatim. What you will actually see:
+
+| `oauth_error` | Cause | Retryable? |
+|---|---|---|
+| `invalid_grant` | The code is spent — unknown, expired (60s), already used, PKCE mismatch, or the asset's domain verification lapsed mid-flow | No. Start a **new** login; the code cannot be reused |
+| `invalid_request` | Client authentication failed — wrong secret, a bad `private_key_jwt` assertion, or `tls_client_auth` (not accepted at `/token` yet) | No. Fix your client configuration |
+| `unsupported_grant_type` | Something other than `authorization_code` reached `/token` | No. A bug |
+
+Errors that surface in the **frontend** instead, before your backend is
+involved (from the SDK's `onError` / `onNonOAuthError`), so handle them there:
+
+| Where | Code | Meaning |
+|---|---|---|
+| `/pair` | `invalid_scope` | A scope not on the asset's allowed list, or a Tier B scope from a public client |
+| `/pair` | `invalid_request` | Missing PKCE/nonce, an unverified sector, an unregistered `redirect_uri`, or an unknown `acr_values` |
+| `/pair` | `login_required` | `prompt=none` with no silent session to resume — the expected quiet outcome, not a failure |
+| pairing | `request_denied` | The holder declined in their ZOREAL ID app — **not an error to alarm on**; offer to try again |
+| pairing | `request_expired` | The pairing window elapsed, or a required liveness the device could not meet — offer to try again |
+
+The gem's other error classes: `ConfigurationError` (you built the client wrong,
+or asked to verify an acr outside the vocabulary — a bug in your code, not a bad
+token), `VerificationError` (the ID token did not verify: signature, `iss`,
+`aud`, `exp`, `nonce`, or the acr floor), and `UserinfoError` (the `/userinfo`
+call failed). A returning user matched on `sub` can survive a rescued
+`UserinfoError`; a signup that needs the email cannot.
+
+## The assurance block
+
+`login.assurance` is the ID token's `zoreal` claim — a hash describing the
+strength of the *identity* behind this login (distinct from `acr`, which grades
+the *login event*). Its keys and their value sets:
+
+| Key | Values | Meaning |
+|---|---|---|
+| `uniqueness` | `personal_number` \| `document` \| `none` | The anchor the holder is deduplicated on. `personal_number` (a national number from the chip) is strongest; `none` means no reliable anchor |
+| `verified_on` | `"YYYY-MM"` | The month the underlying document was verified. Quantised to a month on purpose — a day-precision date is a cross-site correlator |
+| `chip_liveness_proven` | `true` \| `false` | Whether the passport chip's active-authentication challenge was proven (a genuine chip, not a clone) |
+| `trust_tier` | `high` \| `standard` | `high` when `chip_liveness_proven`, else `standard` |
+| `key_protection` | `secure_enclave` \| `strongbox` \| `tee` \| `software` | How the holder's device key is protected. `software` means no hardware attestation |
+
+A high-value flow usually pairs `acr: 'zoreal.live'` (fresh presence) with a
+check on the assurance block (identity strength) — e.g. requiring
+`uniqueness == 'personal_number'` and `trust_tier == 'high'`.
+
+## A complete example
+
+A Rails controller, end to end — the shape a real integration takes:
+
+```ruby
+# config/routes.rb
+post '/auth/zoreal', to: 'sessions#zoreal'
+
+# app/controllers/sessions_controller.rb
+class SessionsController < ApplicationController
+  # Your frontend's ZorealLogin onSuccess posts { code, code_verifier, nonce }
+  # here over your own TLS. Protect this endpoint with your normal CSRF /
+  # same-origin controls, exactly as you would any login endpoint — the ZOREAL
+  # nonce protects the token, not your route.
+  def zoreal
+    login = ZOREAL_OAUTH.authenticate(
+      code: params[:code],
+      code_verifier: params[:code_verifier],
+      nonce: params[:nonce]
+      # acr: 'zoreal.live'  # add for a step-up / high-value login
+    )
+
+    user = User.find_by(provider: 'zoreal', uid: login.sub)
+    if user.nil?
+      # Claim an existing account that owns this verified email rather than
+      # colliding on the unique index; otherwise create one.
+      user = User.find_by(email: login.email) if login.email_verified?
+      user ||= User.new(email: login.email, full_name: login.name)
+      user.update!(provider: 'zoreal', uid: login.sub)
+    end
+
+    reset_session                       # fixation defence
+    session[:user_id] = user.id
+    render json: { ok: true }
+  rescue Zoreal::OAuth2::ExchangeError, Zoreal::OAuth2::VerificationError => e
+    # A spent code or a token that did not verify: the login must be restarted.
+    Rails.logger.warn("ZOREAL login failed: #{e.message}")
+    render json: { error: 'sign_in_failed' }, status: :unauthorized
+  rescue Zoreal::OAuth2::UserinfoError => e
+    # Personal data was unreachable. Fine for a returning user matched on sub;
+    # fatal for a signup that needs the email.
+    render json: { error: 'sign_in_failed' }, status: :unauthorized
+  end
+end
+```
 
 ## Things worth knowing before you integrate
 
@@ -223,20 +371,19 @@ signup that needs the email cannot.
   rotates every `sub` you have stored. Plan domain changes as a migration.
 - **ES256 only.** The provider signs with nothing else, and this gem refuses
   other algorithms rather than negotiating.
-- **Always pass the nonce through.** The SDK generates it and gives it to your
-  frontend in `onSuccess`; without it your backend cannot tell a substituted
-  ID token from the real one.
+- **Always pass the nonce through, and protect your own endpoint too.** The SDK
+  generates the nonce and gives it to your frontend in `onSuccess`; passing it
+  here lets the gem confirm the ID token was minted for *this* login rather than
+  substituted. Two things it does **not** do: it is not your endpoint's CSRF
+  token (protect your `/auth/zoreal` route with your framework's normal CSRF /
+  same-origin defence), and PKCE — not the nonce — is what proves whoever
+  exchanges the code is whoever started the flow.
 - **Email is a deliberate choice.** It is a Tier B scope precisely because a
   shared email defeats the unlinkability the pairwise `sub` provides. Request
   it because you need it, not because the checkbox is familiar.
-- **Sandbox clients accept localhost origins; production clients do not.**
-  Registration lives in the ZOREAL dashboard on the asset's OAuth2 tab; Tier B
-  scopes (email, profile.\*) need a confidential client on a verified domain.
-
-## Development against a local provider
-
-Point `issuer:` at your provider instance. The issuer value must match the `iss` inside the
-tokens exactly — it is compared, not normalized.
+- **The `issuer` must match the token's `iss` exactly** — it is compared, not
+  normalized. Production is `https://id.zoreal.com`; override `issuer:` only
+  when pointing at a non-production provider you were given.
 
 ## The ZOREAL OAuth2 library family
 
