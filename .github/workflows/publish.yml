@@ -1,0 +1,65 @@
+# Auto-release zoreal-oauth2 on every push to main, the family pattern set by
+# zoreal-oauth2-react: bump the patch in version.rb, run the tests, build and
+# push the gem, push the bump commit and tag back to main, and cut the GitHub
+# release. The push back uses the default GITHUB_TOKEN, which does not
+# retrigger this workflow, and the bump commit carries [skip publish] as a
+# second guard.
+#
+# To ship without cutting a release (docs, CI tweaks), put [skip publish] in
+# the commit message.
+#
+# Needs: the RUBYGEMS_API_KEY secret (an API key from rubygems.org with push
+# scope for zoreal-oauth2).
+name: Publish to RubyGems
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: "!contains(github.event.head_commit.message, '[skip publish]')"
+    runs-on: ubuntu-latest
+    environment: rubygems-publish
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+          bundler-cache: true
+
+      - id: bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          CURRENT=$(ruby -r./lib/zoreal/oauth2/version -e 'puts Zoreal::OAuth2::VERSION')
+          NEW="${CURRENT%.*}.$(( ${CURRENT##*.} + 1 ))"
+          sed -i "s/VERSION = '${CURRENT}'/VERSION = '${NEW}'/" lib/zoreal/oauth2/version.rb
+          echo "version=${NEW}" >> "$GITHUB_OUTPUT"
+
+      - run: bundle exec rake test
+      - run: gem build zoreal-oauth2.gemspec
+
+      - run: |
+          git add lib/zoreal/oauth2/version.rb
+          git commit -m "Release v${{ steps.bump.outputs.version }} [skip publish]"
+          git tag "v${{ steps.bump.outputs.version }}"
+          git push origin HEAD:main --follow-tags
+
+      - run: gem push "zoreal-oauth2-${{ steps.bump.outputs.version }}.gem"
+        env:
+          GEM_HOST_API_KEY: ${{ secrets.RUBYGEMS_API_KEY }}
+
+      - run: gh release create "v${{ steps.bump.outputs.version }}" --title "v${{ steps.bump.outputs.version }}" --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
