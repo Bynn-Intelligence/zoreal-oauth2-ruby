@@ -54,7 +54,7 @@ jobs:
           git add lib/zoreal/oauth2/version.rb
           git commit -m "Release v${{ steps.bump.outputs.version }} [skip publish]"
           git tag "v${{ steps.bump.outputs.version }}"
-          git push origin HEAD:main --follow-tags
+          git push origin HEAD:main "v${{ steps.bump.outputs.version }}"
 
       - run: gem push "zoreal-oauth2-${{ steps.bump.outputs.version }}.gem"
         env:
