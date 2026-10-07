@@ -410,6 +410,7 @@ gh attestation verify zoreal-oauth2-*.gem --repo Bynn-Intelligence/zoreal-oauth2
 | zoreal-oauth2-go | github.com/Bynn-Intelligence/zoreal-oauth2-go | Go backend |
 | zoreal-oauth2-java | com.zoreal:oauth2 (Maven Central) | JVM backend |
 | zoreal-oauth2-dotnet | Zoreal.OAuth2 (NuGet) | .NET backend |
+| zoreal-oauth2-rust | zoreal-oauth2 (crates.io) | Rust backend |
 
 The repository always carries the platform suffix; the package drops it where
 the registry already scopes the ecosystem. None of them are named after a
